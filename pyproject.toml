@@ -1,0 +1,39 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ccsm"
+version = "1.0.0"
+description = "Claude Code Session Manager - Manage and delete Claude Code sessions and projects"
+readme = "README.md"
+requires-python = ">=3.10"
+authors = [
+    { name = "You" }
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+]
+dependencies = [
+    "rich>=13.0.0",
+    "questionary>=1.10.0",
+    "textual>=0.90.0",
+]
+
+[project.scripts]
+ccsm = "ccsm.__main__:main"
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0.0",
+    "pytest-cov>=4.0.0",
+]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["ccsm*"]

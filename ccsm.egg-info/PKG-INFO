@@ -1,0 +1,93 @@
+Metadata-Version: 2.4
+Name: ccsm
+Version: 1.0.0
+Summary: Claude Code Session Manager - Manage and delete Claude Code sessions and projects
+Author: You
+Classifier: Development Status :: 4 - Beta
+Classifier: Environment :: Console
+Classifier: Intended Audience :: Developers
+Classifier: Programming Language :: Python :: 3.10
+Classifier: Programming Language :: Python :: 3.11
+Classifier: Programming Language :: Python :: 3.12
+Requires-Python: >=3.10
+Description-Content-Type: text/markdown
+Requires-Dist: rich>=13.0.0
+Requires-Dist: questionary>=1.10.0
+Provides-Extra: dev
+Requires-Dist: pytest>=7.0.0; extra == "dev"
+Requires-Dist: pytest-cov>=4.0.0; extra == "dev"
+
+# Claude Code Session Manager (CCSM)
+
+A CLI tool for managing and deleting Claude Code sessions and projects.
+
+## Features
+
+- **List** all projects and their associated sessions
+- **Info** - View detailed information about a session
+- **Delete** - Delete specific sessions with proper cleanup
+- **Delete Project** - Delete entire projects and all their sessions
+- **Cleanup** - Find and remove orphaned sessions
+- **Interactive** - TUI mode (coming soon)
+
+## Installation
+
+```bash
+pip install -e .
+```
+
+## Usage
+
+### List all projects and sessions
+
+```bash
+ccsm list
+ccsm list --json
+ccsm list --project "~/Documents/Dev/my-project" -v
+```
+
+### Show session info
+
+```bash
+ccsm info <session-id>
+```
+
+### Delete a session
+
+```bash
+ccsm delete <session-id>
+ccsm delete <session-id> --dry-run
+ccsm delete <session-id> --force
+```
+
+### Delete a project
+
+```bash
+ccsm delete-project "~/Documents/Dev/my-project"
+ccsm delete-project "~/Documents/Dev/my-project" --include-claude-dir
+```
+
+### Cleanup orphaned sessions
+
+```bash
+ccsm cleanup
+ccsm cleanup --auto-remove
+```
+
+## Data Locations
+
+CCSM manages data in the following locations:
+
+- `~/.claude/tasks/{session_id}/` - Task directories
+- `~/.claude/todos/` - Todo files
+- `~/.claude/plans/` - Saved plans
+- `~/.claude/session-env/{session_id}/` - Environment variables
+- `~/.claude/file-history/{session_id}/` - File edit history
+- `~/.claude/debug/{session_id}.txt` - Debug logs
+- `~/.claude/telemetry/` - Telemetry events
+- `~/.claude/paste-cache/` - Paste content cache (reference counted)
+- `~/.claude/history.jsonl` - Conversation history
+
+## License
+
+MIT

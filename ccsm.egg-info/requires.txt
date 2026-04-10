@@ -1,0 +1,6 @@
+rich>=13.0.0
+questionary>=1.10.0
+
+[dev]
+pytest>=7.0.0
+pytest-cov>=4.0.0
