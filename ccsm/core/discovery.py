@@ -175,7 +175,7 @@ class SessionDiscovery:
         # 7. Discover from plans/
         plans_dir = self.claude_dir / "plans"
         if plans_dir.exists():
-            for plan_file in plans_dir.glob("*.json"):
+            for plan_file in plans_dir.glob("*.md"):
                 try:
                     with open(plan_file, "r", encoding="utf-8") as f:
                         plan_data = json.load(f)
@@ -185,7 +185,24 @@ class SessionDiscovery:
                 except (json.JSONDecodeError, IOError):
                     continue
 
-        # 8. Determine status and created_at from history
+            # 8. Discover from projects/ directories
+        # These contain .jsonl transcript files for sessions
+        projects_dir = self.claude_dir / "projects"
+        if projects_dir.exists():
+            for proj_dir in projects_dir.iterdir():
+                if proj_dir.is_dir() and proj_dir.name != ".DS_Store":
+                    for session_file in proj_dir.glob("*.jsonl"):
+                        session_id = session_file.stem
+                        # Skip agent-* files (these are internal agent sessions)
+                        if session_id.startswith("agent-"):
+                            continue
+                        if session_id not in sessions:
+                            sessions[session_id] = Session(
+                                id=session_id,
+                                project_path=session_to_project.get(session_id),
+                            )
+
+    # 9. Determine status and created_at from history
         history_path = self.claude_dir / "history.jsonl"
         if history_path.exists():
             session_times = defaultdict(list)

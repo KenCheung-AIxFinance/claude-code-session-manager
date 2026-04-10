@@ -324,8 +324,54 @@ class SessionDeleter:
 
         return result
 
+    def get_stale_history_entries(self) -> list[dict]:
+        """Find entries in history.jsonl that reference non-existent sessions.
+
+        Returns:
+            List of dicts with 'line_number' and 'session_id' for stale entries.
+        """
+        stale = []
+        history_path = self.claude_dir / "history.jsonl"
+
+        if not history_path.exists():
+            return stale
+
+        # Get session IDs from projects/ directory only
+        # Only sessions with .jsonl transcript files are considered "linked"
+        projects_sessions = set()
+        projects_dir = self.claude_dir / "projects"
+        if projects_dir.exists():
+            for proj_dir in projects_dir.iterdir():
+                if proj_dir.is_dir() and proj_dir.name != ".DS_Store":
+                    for f in proj_dir.glob("*.jsonl"):
+                        sid = f.stem
+                        if not sid.startswith("agent-"):
+                            projects_sessions.add(sid)
+
+        with open(history_path, "r", encoding="utf-8") as f:
+            for line_num, line in enumerate(f, start=1):
+                try:
+                    entry = json.loads(line.strip())
+                    session_id = entry.get("sessionId")
+                    # If session ID not in projects/ -> it's stale (not linked)
+                    if session_id and session_id not in projects_sessions:
+                        stale.append({
+                            "line_number": line_num,
+                            "session_id": session_id,
+                            "project": entry.get("project"),
+                            "timestamp": entry.get("timestamp"),
+                        })
+                except json.JSONDecodeError:
+                    continue
+
+        return stale
+
     def cleanup(self, auto_remove: bool = False) -> DeleteResult:
-        """Clean up orphaned data (sessions without projects).
+        """Clean up orphaned data and stale history entries.
+
+        This automatically cleans:
+        - Orphan sessions (sessions without projects)
+        - Stale history.jsonl entries (sessions that no longer exist in data directories)
 
         Args:
             auto_remove: If True, automatically remove orphaned data.
@@ -338,8 +384,11 @@ class SessionDeleter:
         # Get orphan sessions
         orphans = self.discovery.get_orphan_sessions()
 
-        if not orphans:
-            result.skipped_files.append("No orphaned sessions found")
+        # Always get stale history entries (clean them automatically)
+        stale_entries = self.get_stale_history_entries()
+
+        if not orphans and not stale_entries:
+            result.skipped_files.append("No orphaned sessions or stale history entries found")
             return result
 
         if not auto_remove:
@@ -347,13 +396,34 @@ class SessionDeleter:
             for session in orphans:
                 info = self.plan_session_deletion(session.id)
                 result.skipped_files.append(f"Orphan session: {session.id} ({len(info.files_to_delete)} files)")
+
+            for entry in stale_entries:
+                result.skipped_files.append(
+                    f"Stale history: line {entry['line_number']} - session {entry['session_id']} (project: {entry.get('project', 'N/A')})"
+                )
             return result
 
-        # Actually delete orphan sessions
+        # Delete orphan sessions
         for session in orphans:
             session_result = self.delete_session(session.id)
             result.deleted_files.extend(session_result.deleted_files)
             result.modified_files.extend(session_result.modified_files)
             result.errors.extend(session_result.errors)
+
+        # Always clean stale history entries when auto_remove=True
+        if stale_entries:
+            history_path = self.claude_dir / "history.jsonl"
+            # Read all lines and filter out stale ones
+            with open(history_path, "r", encoding="utf-8") as f:
+                lines = f.readlines()
+
+            stale_line_nums = {entry['line_number'] for entry in stale_entries}
+            valid_lines = [line for i, line in enumerate(lines, start=1) if i not in stale_line_nums]
+
+            # Rewrite history.jsonl with valid lines only
+            with open(history_path, "w", encoding="utf-8") as f:
+                f.writelines(valid_lines)
+
+            result.modified_files.append(str(history_path))
 
         return result
