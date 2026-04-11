@@ -17,7 +17,7 @@ A CLI and TUI tool for managing Claude Code sessions and projects. List, inspect
 
 ```bash
 # Clone the repository
-git clone https://github.com/yourusername/ccsm.git
+git clone https://github.com/KenCheung-AIxFinance/claude-code-session-manager.git
 cd ccsm
 
 # Create virtual environment (recommended)
