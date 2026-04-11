@@ -154,7 +154,7 @@ ccsm info <session_id> && echo "Session exists" || echo "Session not found"
 
 5. **No plan deletion by default**: Global plans in `~/.claude/plans/*.md` are never automatically deleted (they may be user-created and shared).
 
-6. **Orphan cleanup**: The safest way is `ccsm delete <orphan_id> --force` one at a time. Avoid `ccsm cleanup --auto-remove` unless you're certain (it deletes ALL orphans).
+6. **Orphan cleanup**: The safest way is `ccsm delete <orphan_id> -y` one at a time. Avoid `ccsm cleanup -y` (or `-a`, `--auto-remove`) unless you're certain (it deletes ALL orphans).
 
 ## Design Spec
 

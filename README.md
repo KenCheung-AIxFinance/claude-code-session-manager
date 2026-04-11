@@ -121,6 +121,8 @@ ccsm cleanup
 # Delete all orphaned sessions automatically
 ccsm cleanup -y
 # or
+ccsm cleanup -a
+# or
 ccsm cleanup --auto-remove
 ```
 
