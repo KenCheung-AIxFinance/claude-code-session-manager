@@ -54,6 +54,15 @@ class SessionDiscovery:
 
         return self._session_to_project_cache
 
+    def invalidate_cache(self) -> None:
+        """Invalidate all caches to force refresh on next access.
+
+        This should be called after deletion operations to ensure
+        stale data is not displayed.
+        """
+        self._session_to_project_cache = None
+        self._paste_hash_references = None
+
     def get_paste_hash_references(self) -> dict[str, set[str]]:
         """Build a map of contentHash -> set of session_ids that reference it.
 

@@ -164,10 +164,13 @@ class CCSMApp(App):
         self._update_detail_panel()
 
     def load_data(self) -> None:
+        # Invalidate cache first to ensure fresh data after delete operations
+        self.discovery.invalidate_cache()
+
         self.projects = self.discovery.discover_projects()
         self.orphans = self.discovery.get_orphan_sessions()
 
-        # Validate selection
+        # Validate selection based on current mode
         if self.state.mode == "projects":
             if self.projects:
                 if self.state.selected_project_index is None:
@@ -175,9 +178,20 @@ class CCSMApp(App):
                 elif self.state.selected_project_index >= len(self.projects):
                     self.state.selected_project_index = len(self.projects) - 1
             else:
+                # No projects available - switch to orphans or reset
                 self.state.selected_project_index = None
-        else:
-            self.state.selected_project_index = None
+                if self.orphans:
+                    self.state.mode = "orphans"
+
+        # Validate orphans mode (previously missing!)
+        elif self.state.mode == "orphans":
+            if not self.orphans:
+                # No orphans - switch back to projects
+                self.state.mode = "projects"
+                if self.projects:
+                    self.state.selected_project_index = 0
+                else:
+                    self.state.selected_project_index = None
 
         self.state.selected_session_index = None
         self._update_projects_table()
@@ -205,8 +219,22 @@ class CCSMApp(App):
                 pass  # Ignore cursor move errors
 
     def _update_views(self) -> None:
-        # Only update projects table if projects list changed or first load
-        # For now, always rebuild but only when data actually needs refresh
+        # Validate mode matches available data
+        if self.state.mode == "projects" and not self.projects:
+            # No projects - switch to orphans if available
+            if self.orphans:
+                self.state.mode = "orphans"
+                self.state.selected_project_index = None
+            else:
+                # Both are empty - reset to projects mode
+                self.state.selected_project_index = None
+        elif self.state.mode == "orphans" and not self.orphans:
+            # No orphans - switch to projects
+            self.state.mode = "projects"
+            if self.projects:
+                self.state.selected_project_index = 0
+            else:
+                self.state.selected_project_index = None
 
         # Update sessions table based on current selection
         self._update_sessions_table()
@@ -223,8 +251,13 @@ class CCSMApp(App):
         st.clear()
 
         if self.state.mode == "projects" and self.state.selected_project_index is not None:
-            self._current_sessions = self.projects[self.state.selected_project_index].sessions
-            proj_name = self._shorten_path(self.projects[self.state.selected_project_index].path)
+            # Validate project index
+            if self.state.selected_project_index >= len(self.projects):
+                self.state.selected_project_index = None
+                self._current_sessions = []
+            else:
+                self._current_sessions = self.projects[self.state.selected_project_index].sessions
+            proj_name = self._shorten_path(self.projects[self.state.selected_project_index].path) if self.state.selected_project_index is not None else "Unknown"
             self.query_one("#right-title", Label).update(f"Sessions in: {proj_name}")
             self.query_one("#right-hint", Static).update(f"[d] Delete selected session")
         elif self.state.mode == "orphans":
@@ -243,8 +276,15 @@ class CCSMApp(App):
             created = s.created_at.strftime("%Y-%m-%d") if s.created_at else "N/A"
             st.add_row(sid, status, tasks, created, key=str(i))
 
-        # Clear session selection when project changes
-        self.state.selected_session_index = None
+        # Validate selected_session_index against new session count
+        if self._current_sessions:
+            if self.state.selected_session_index is None:
+                self.state.selected_session_index = 0
+            elif self.state.selected_session_index >= len(self._current_sessions):
+                # Index now out of bounds - reset to last valid or first
+                self.state.selected_session_index = len(self._current_sessions) - 1
+        else:
+            self.state.selected_session_index = None
 
         # Update detail panel
         self._update_detail_panel()
@@ -376,22 +416,18 @@ Files to modify: {len(info.files_to_modify)}"""
             return
 
         s = self._current_sessions[self.state.selected_session_index]
-        info = self.deleter.plan_session_deletion(s.id)
 
-        ok = await self.confirm(
-            f"Delete session {s.id[:8]}…?\n\n"
-            f"Project: {self._shorten_path(s.project_path) if s.project_path else 'None'}\n"
-            f"Tasks: {s.task_count} Todos: {s.todo_count}\n\n"
-            f"Files to delete: {len(info.files_to_delete)}\n"
-            f"Files to modify: {len(info.files_to_modify)}"
-        )
-        if not ok:
-            return
-
+        # In TUI mode, directly delete without confirmation
+        # (User has already selected the session, so we assume they intend to delete)
         result = self.deleter.delete_session(s.id, force=True)
         if result.success:
             self.notify(f"Deleted {s.id[:8]}…", severity="success")
+            # Clear current session cache to prevent stale data
+            self._current_sessions = []
+            # Reset selections completely
             self.state.selected_session_index = None
+            self.state.selected_project_index = None
+            # Deep refresh with cache invalidation
             self.load_data()
         else:
             self.notify(f"Delete failed: {result.errors[0]}", severity="error")
