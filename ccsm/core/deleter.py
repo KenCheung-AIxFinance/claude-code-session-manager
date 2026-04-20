@@ -403,27 +403,26 @@ class SessionDeleter:
                 )
             return result
 
-        # Delete orphan sessions
-        for session in orphans:
-            session_result = self.delete_session(session.id)
-            result.deleted_files.extend(session_result.deleted_files)
-            result.modified_files.extend(session_result.modified_files)
-            result.errors.extend(session_result.errors)
-
-        # Always clean stale history entries when auto_remove=True
+        # CRITICAL: Clean stale history entries FIRST (before delete_session modifies history.jsonl)
+        # If we delete sessions first, the line numbers become invalid
         if stale_entries:
             history_path = self.claude_dir / "history.jsonl"
-            # Read all lines and filter out stale ones
             with open(history_path, "r", encoding="utf-8") as f:
                 lines = f.readlines()
 
             stale_line_nums = {entry['line_number'] for entry in stale_entries}
             valid_lines = [line for i, line in enumerate(lines, start=1) if i not in stale_line_nums]
 
-            # Rewrite history.jsonl with valid lines only
             with open(history_path, "w", encoding="utf-8") as f:
                 f.writelines(valid_lines)
 
             result.modified_files.append(str(history_path))
+
+        # Delete orphan sessions (history.jsonl already cleaned above)
+        for session in orphans:
+            session_result = self.delete_session(session.id)
+            result.deleted_files.extend(session_result.deleted_files)
+            result.modified_files.extend(session_result.modified_files)
+            result.errors.extend(session_result.errors)
 
         return result
