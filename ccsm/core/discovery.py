@@ -5,6 +5,7 @@ This module discovers sessions and projects from Claude Code's data directories.
 
 import json
 import os
+import re
 import glob
 from collections import defaultdict
 from datetime import datetime
@@ -12,6 +13,26 @@ from pathlib import Path
 from typing import Optional
 
 from ccsm.core.models import Project, Session
+
+
+# Wrappers Claude Code injects into the user-message stream. We strip these
+# before falling back to "first user message" as a session title.
+_NOISE_TAGS = (
+    "local-command-caveat",
+    "command-message",
+    "command-name",
+    "command-args",
+    "command-stdout",
+    "command-stderr",
+    "system-reminder",
+    "bash-input",
+    "bash-stdout",
+    "bash-stderr",
+    "user-prompt-submit-hook",
+)
+_NOISE_RE = re.compile(
+    "|".join(rf"<{tag}>.*?</{tag}>" for tag in _NOISE_TAGS), re.DOTALL
+)
 
 
 class SessionDiscovery:
@@ -196,6 +217,7 @@ class SessionDiscovery:
 
             # 8. Discover from projects/ directories
         # These contain .jsonl transcript files for sessions
+        session_transcripts: dict[str, Path] = {}
         projects_dir = self.claude_dir / "projects"
         if projects_dir.exists():
             for proj_dir in projects_dir.iterdir():
@@ -205,6 +227,7 @@ class SessionDiscovery:
                         # Skip agent-* files (these are internal agent sessions)
                         if session_id.startswith("agent-"):
                             continue
+                        session_transcripts[session_id] = session_file
                         if session_id not in sessions:
                             sessions[session_id] = Session(
                                 id=session_id,
@@ -228,17 +251,140 @@ class SessionDiscovery:
 
             for session_id, timestamps in session_times.items():
                 if timestamps:
-                    min_ts = min(timestamps)
-                    sessions[session_id].created_at = datetime.fromtimestamp(min_ts / 1000)
+                    sessions[session_id].created_at = datetime.fromtimestamp(min(timestamps) / 1000)
+                    sessions[session_id].updated_at = datetime.fromtimestamp(max(timestamps) / 1000)
                     # Assume most recent activity means still in_progress
                     sessions[session_id].status = "completed"
+
+        # Prefer transcript file mtime as updated_at — it captures assistant
+        # writes too, not just user prompts in history.jsonl.
+        for session_id, transcript in session_transcripts.items():
+            if session_id not in sessions:
+                continue
+            try:
+                mtime = transcript.stat().st_mtime
+            except OSError:
+                continue
+            ts = datetime.fromtimestamp(mtime)
+            current = sessions[session_id].updated_at
+            if current is None or ts > current:
+                sessions[session_id].updated_at = ts
 
         # Check if any session is the current one
         current_session_id = os.environ.get("CLAUDE_SESSION_ID")
         if current_session_id and current_session_id in sessions:
             sessions[current_session_id].status = "in_progress"
 
+        # 10. Populate session names. Priority: live PID marker (reflects a
+        # rename before it lands in the transcript) > last custom-title in
+        # the transcript > first non-boilerplate user prompt.
+        live_names = self._live_session_names()
+        for session_id, session in sessions.items():
+            name = live_names.get(session_id)
+            if not name:
+                transcript = session_transcripts.get(session_id)
+                if transcript is not None:
+                    title, first_prompt = self._read_transcript_metadata(transcript)
+                    name = title or first_prompt
+            if name:
+                session.name = name
+
         return list(sessions.values())
+
+    def _live_session_names(self) -> dict[str, str]:
+        """Map sessionId -> name from live PID marker files in sessions/."""
+        result: dict[str, str] = {}
+        sessions_dir = self.claude_dir / "sessions"
+        if not sessions_dir.exists():
+            return result
+        for marker in sessions_dir.glob("*.json"):
+            try:
+                with open(marker, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+            except (json.JSONDecodeError, IOError, OSError):
+                continue
+            session_id = data.get("sessionId")
+            name = data.get("name")
+            if session_id and isinstance(name, str) and name.strip():
+                result[session_id] = name.strip()
+        return result
+
+    @staticmethod
+    def _read_transcript_metadata(path: Path) -> tuple[Optional[str], Optional[str]]:
+        """Return (last_custom_title, first_user_prompt) from a transcript.
+
+        Single forward pass. The first-user-prompt search short-circuits as
+        soon as a non-empty cleaned prompt is found; the custom-title search
+        keeps overwriting because the LAST entry wins.
+        """
+        last_title: Optional[str] = None
+        first_prompt: Optional[str] = None
+        try:
+            with open(path, "rb") as f:
+                for raw in f:
+                    if b'"custom-title"' in raw:
+                        try:
+                            entry = json.loads(raw)
+                        except json.JSONDecodeError:
+                            entry = None
+                        if entry and entry.get("type") == "custom-title":
+                            title = entry.get("customTitle")
+                            if isinstance(title, str) and title.strip():
+                                last_title = title.strip()
+                        continue
+                    if first_prompt is None and b'"type":"user"' in raw:
+                        try:
+                            entry = json.loads(raw)
+                        except json.JSONDecodeError:
+                            continue
+                        if entry.get("type") != "user" or entry.get("isSidechain"):
+                            continue
+                        text = SessionDiscovery._extract_user_text(
+                            entry.get("message", {})
+                        )
+                        cleaned = SessionDiscovery._clean_user_text(text)
+                        if cleaned:
+                            first_prompt = cleaned
+        except (IOError, OSError):
+            pass
+        return last_title, first_prompt
+
+    @staticmethod
+    def _extract_user_text(message: dict) -> str:
+        """Pull plain text out of a user message (string or content blocks)."""
+        content = message.get("content")
+        if isinstance(content, str):
+            return content
+        if isinstance(content, list):
+            parts = []
+            for block in content:
+                if isinstance(block, dict) and block.get("type") == "text":
+                    parts.append(block.get("text", ""))
+            return "\n".join(parts)
+        return ""
+
+    @staticmethod
+    def _clean_user_text(text: str) -> str:
+        """Strip Claude Code's injected wrappers and shorten to one title-like line.
+
+        Returns "" for entries that are unlikely to be meaningful titles —
+        short single-word prompts ("clear", "Continue", "Yes") that are
+        usually slash-command echoes or follow-up confirmations.
+        """
+        text = _NOISE_RE.sub("", text)
+        text = text.strip()
+        if not text:
+            return ""
+        # Take the first paragraph so a long prompt doesn't bleed into the title.
+        first_para = text.split("\n\n", 1)[0]
+        # Collapse internal whitespace to keep it on one line.
+        first_para = re.sub(r"\s+", " ", first_para).strip()
+        # Skip single short words — almost always slash-command echoes or "yes"/"continue".
+        if len(first_para) < 15 and " " not in first_para:
+            return ""
+        if len(first_para) > 100:
+            first_para = first_para[:97].rstrip() + "..."
+        return first_para
 
     def discover_projects(self) -> list[Project]:
         """Discover all projects and their associated sessions.
@@ -261,15 +407,23 @@ class SessionDiscovery:
                 # But we'll handle them separately
                 pass
 
-        # Build Project objects
+        # Build Project objects with sessions sorted by most recent activity.
         projects = []
         for path, proj_sessions in project_map.items():
+            proj_sessions.sort(key=self._session_sort_key, reverse=True)
             projects.append(Project(path=path, sessions=proj_sessions))
 
         # Sort by path
         projects.sort(key=lambda p: p.path)
 
         return projects
+
+    @staticmethod
+    def _session_sort_key(session: Session):
+        """Sort by updated_at desc, fall back to created_at, then session id."""
+        ts = session.updated_at or session.created_at
+        # datetime.min keeps untimestamped sessions at the bottom when reversed.
+        return (ts or datetime.min, session.id)
 
     def get_projects_session_ids(self) -> set[str]:
         """Get all session IDs that have .jsonl files in projects/.
@@ -307,6 +461,7 @@ class SessionDiscovery:
             if session.id not in projects_session_ids:
                 orphans.append(session)
 
+        orphans.sort(key=self._session_sort_key, reverse=True)
         return orphans
 
     def get_session_by_id(self, session_id: str) -> Optional[Session]:

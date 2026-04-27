@@ -1,5 +1,6 @@
 rich>=13.0.0
 questionary>=1.10.0
+textual>=0.90.0
 
 [dev]
 pytest>=7.0.0

@@ -49,8 +49,10 @@ def format_list_output(
             console.print(f"{status_icon} {path_short} [dim]({project.session_count} sessions)[/dim]")
             for session in project.sessions:
                 status_marker = "●active" if session.status == "in_progress" else ""
-                created = session.created_at.strftime("%Y-%m-%d") if session.created_at else "unknown"
-                console.print(f" ├── {session.id} [{created}] {status_marker}")
+                updated = (session.updated_at or session.created_at)
+                updated_str = updated.strftime("%Y-%m-%d") if updated else "unknown"
+                title = f" [cyan]{session.name}[/cyan]" if session.name else ""
+                console.print(f" ├── {session.id} [{updated_str}] {status_marker}{title}")
                 if verbose:
                     console.print(f" │ tasks:{session.task_count} todos:{session.todo_count} plans:{session.plan_count}")
         else:
@@ -78,9 +80,13 @@ def format_info_output(session: Session, info: SessionInfo) -> None:
 
     # Session details panel
     details = []
+    if session.name:
+        details.append(f"[bold]Title:[/bold] {session.name}")
     details.append(f"[bold]Session ID:[/bold] {session.id}")
     details.append(f"[bold]Project:[/bold] {session.project_path or 'None'}")
     details.append(f"[bold]Status:[/bold] {session.status}")
+    if session.updated_at:
+        details.append(f"[bold]Updated:[/bold] {session.updated_at.strftime('%Y-%m-%d %H:%M:%S')}")
     if session.created_at:
         details.append(f"[bold]Created:[/bold] {session.created_at.strftime('%Y-%m-%d %H:%M:%S')}")
     details.append(f"[bold]Tasks:[/bold] {session.task_count}")

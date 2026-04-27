@@ -120,7 +120,7 @@ class CCSMApp(App):
 
         # Set up sessions table
         st = self.query_one("#sessions-table", DataTable)
-        st.add_columns("ID", "Status", "Tasks", "Created")
+        st.add_columns("ID", "Title", "Status", "Tasks", "Updated")
         st.cursor_type = "row"
 
         self.load_data()
@@ -271,10 +271,14 @@ class CCSMApp(App):
 
         for i, s in enumerate(self._current_sessions):
             sid = s.id[:8] + "..."
+            title = s.name if s.name else "[dim](untitled)[/dim]"
+            if s.name and len(s.name) > 32:
+                title = s.name[:29] + "..."
             status = s.status or "?"
             tasks = str(s.task_count)
-            created = s.created_at.strftime("%Y-%m-%d") if s.created_at else "N/A"
-            st.add_row(sid, status, tasks, created, key=str(i))
+            updated = (s.updated_at or s.created_at)
+            updated_str = updated.strftime("%Y-%m-%d") if updated else "N/A"
+            st.add_row(sid, title, status, tasks, updated_str, key=str(i))
 
         # Validate selected_session_index against new session count
         if self._current_sessions:
@@ -308,8 +312,13 @@ class CCSMApp(App):
 
         proj = self._shorten_path(s.project_path) if s.project_path else "(none)"
         created = s.created_at.strftime("%Y-%m-%d %H:%M:%S") if s.created_at else "N/A"
+        updated = s.updated_at.strftime("%Y-%m-%d %H:%M:%S") if s.updated_at else "N/A"
 
-        text = f"""[b]Session ID[/b]
+        title = s.name if s.name else "(untitled)"
+        text = f"""[b]Title[/b]
+{title}
+
+[b]Session ID[/b]
 {s.id}
 
 [b]Project[/b]
@@ -317,6 +326,9 @@ class CCSMApp(App):
 
 [b]Status[/b]
 {s.status or "unknown"}
+
+[b]Updated[/b]
+{updated}
 
 [b]Created[/b]
 {created}
