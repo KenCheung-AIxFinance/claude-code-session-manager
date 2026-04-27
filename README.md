@@ -114,7 +114,7 @@ ccsm delete-project "~/path/to/project" --include-claude-dir -y
 ### Cleanup Orphaned Sessions
 
 ```bash
-# List orphaned sessions (sessions without projects)
+# List orphaned or unmapped sessions
 # Cleanup is a dry-run by default
 ccsm cleanup
 
@@ -157,13 +157,14 @@ CCSM manages data in the following Claude Code directories:
 |------|-------------|
 | `~/.claude/tasks/{session_id}/` | Task files |
 | `~/.claude/todos/` | Todo files (matched by session ID) |
-| `~/.claude/plans/*.md` | Saved Markdown plans (global, not auto-deleted) |
+| `~/.claude/plans/*.md`, `~/.claude/plans/*.json` | Global plan files (deleted only when uniquely referenced by one session) |
 | `~/.claude/sessions/*.json` | Session marker files |
 | `~/.claude/session-env/{session_id}/` | Environment variables |
 | `~/.claude/teams/{session_id}/` | Team data directories |
 | `~/.claude/file-history/{session_id}/` | File edit history |
 | `~/.claude/debug/{session_id}.txt` | Debug logs |
 | `~/.claude/telemetry/` | Telemetry events |
+| `~/.claude/projects/{path_hash}/{session_id}.jsonl` | Per-project session transcript files |
 | `~/.claude/paste-cache/` | Paste content cache (reference-counted) |
 | `~/.claude/history.jsonl` | Conversation history (rewritten on session delete) |
 
@@ -171,7 +172,9 @@ CCSM manages data in the following Claude Code directories:
 
 - Always use `-n` (or `--dry-run`) first to preview what will be deleted (note: `cleanup` is a dry-run by default)
 - `paste-cache` files are shared across sessions with reference counting
-- Global plans (`~/.claude/plans/*.md`) are never automatically deleted
+- Global plans in `~/.claude/plans/` are deleted only when uniquely referenced by the session being removed
+- Session deletion also removes `~/.claude/projects/{path_hash}/{session_id}.jsonl` transcripts
+- Sessions with transcripts but missing `history.jsonl` project mapping are surfaced as orphan/unmapped sessions
 - The safest way to clean orphans is `ccsm delete <orphan-id> --force` one at a time
 - `history.jsonl` is rewritten using streaming (preserves invalid JSON lines)
 

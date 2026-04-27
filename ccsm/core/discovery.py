@@ -209,7 +209,10 @@ class SessionDiscovery:
                             sessions[session_id] = Session(
                                 id=session_id,
                                 project_path=session_to_project.get(session_id),
+                                has_transcript=True,
                             )
+                        else:
+                            sessions[session_id].has_transcript = True
 
     # 9. Determine status and created_at from history
         history_path = self.claude_dir / "history.jsonl"
@@ -303,8 +306,10 @@ class SessionDiscovery:
 
         orphans = []
         for session in sessions:
-            # If session ID is not in projects/, it's an orphan
-            if session.id not in projects_session_ids:
+            # Sessions without transcripts are orphans.
+            # Sessions with transcripts but no project mapping are also surfaced
+            # so transcript-only leftovers do not become invisible.
+            if session.id not in projects_session_ids or (session.has_transcript and not session.project_path):
                 orphans.append(session)
 
         return orphans

@@ -19,13 +19,14 @@ The tool manages data in `~/.claude/` with these key relationships:
 **Global** (under `~/.claude/`):
 - `tasks/{session_id}/` - task files (1.json, 2.json...)
 - `todos/` - todo JSON files matching session ID
-- `plans/*.md` - Markdown plans stored in `~/.claude/plans/` (global, user-created)
+- `plans/*.md`, `plans/*.json` - global plan files in `~/.claude/plans/`
 - `sessions/*.json` - session metadata and PID-based marker files
 - `session-env/{session_id}/` - environment variables for session
 - `teams/{session_id}/` - team data directory
 - `file-history/{session_id}/` - file edit history snapshots
 - `debug/{session_id}.txt` - debug logs
 - `telemetry/1p_failed_events.{session_id}.*.json` - telemetry data
+- `projects/{path_hash}/{session_id}.jsonl` - per-session transcript files grouped by project hash
 - `history.jsonl` - conversation history (sessionId per line)
 - `paste-cache/{hash}.txt` - pasted content cache (shared across sessions, reference-counted)
 
@@ -45,15 +46,20 @@ The tool manages data in `~/.claude/` with these key relationships:
   - `debug/{session_id}.txt`
   - `telemetry/1p_failed_events.{session_id}.*.json`
   - `teams/{session_id}/`
+  - `projects/{path_hash}/{session_id}.jsonl`
   - `sessions/*.json` (PID marker matching this sessionId)
+  - `plans/*.md`, `plans/*.json` (only when uniquely referenced by this session; shared global plans are kept)
   - `paste-cache/{hash}.txt` (only if no other sessions reference it - reference counted)
   - Entries in `history.jsonl` (streaming rewrite, preserves invalid lines)
 
+- **Discovery visibility**:
+  - Sessions with a transcript but missing `history.jsonl` project mapping are surfaced as orphan/unmapped sessions instead of becoming invisible.
+
 - **Project deletion** removes all sessions in the project, plus optionally the project's `.claude/` directory (`--include-claude-dir`).
 
-- **Plans**: Global `~/.claude/plans/*.md` are **NOT** deleted by session deletion (they may be shared). Project-level plans are deleted only when using `--include-claude-dir`.
+- **Plans**: Global `~/.claude/plans/` files are deleted only when uniquely referenced by the session being removed; shared global plans are kept. Project-level plans are deleted only when using `--include-claude-dir`.
 
-- **Orphan sessions**: Sessions that have data in data directories (tasks/, todos/, etc.) but no corresponding .jsonl transcript file in projects/. Can be cleaned with `ccsm cleanup`.
+- **Orphan sessions**: Sessions that have data in data directories (tasks/, todos/, etc.) but no corresponding .jsonl transcript file in projects/, plus transcript-bearing sessions that lost their project mapping. These can be cleaned with `ccsm cleanup`.
 
 ## Commands (actual CLI)
 
@@ -152,9 +158,9 @@ ccsm info <session_id> && echo "Session exists" || echo "Session not found"
 
 4. **history.jsonl safety**: When deleting sessions, history.jsonl is rewritten using streaming (not line-by-line deletion), and invalid JSON lines are preserved.
 
-5. **No plan deletion by default**: Global plans in `~/.claude/plans/*.md` are never automatically deleted (they may be user-created and shared).
+5. **Plan deletion is reference-aware**: Global plans in `~/.claude/plans/` are deleted only when uniquely referenced by the session being removed; shared plans are kept.
 
-6. **Orphan cleanup**: The safest way is `ccsm delete <orphan_id> -y` one at a time. Avoid `ccsm cleanup -y` (or `-a`, `--auto-remove`) unless you're certain (it deletes ALL orphans).
+6. **Orphan cleanup**: The safest way is `ccsm delete <orphan_id> -y` one at a time. Avoid `ccsm cleanup -y` (or `-a`, `--auto-remove`) unless you're certain (it deletes ALL orphan/unmapped sessions).
 
 ## Design Spec
 

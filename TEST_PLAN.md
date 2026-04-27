@@ -15,10 +15,10 @@ This file is the authoritative, human+agent-readable test plan for CCSM.
 - `ccsm cleanup --dry-run`
 - Safe orphan cleanup: `ccsm delete <orphan_id> --force` (one at a time)
 - history.jsonl rewrite preserves bad lines
-- Teams and sessions marker files included in deletion scope
+- Teams, session marker files, and project transcripts included in deletion scope
+- Orphan/unmapped session visibility preserved when transcript exists but history mapping is missing
 
 ### ❌ Not Implemented / Deferred
-- Plan (.md) reference detection and deletion
 - `ccsm cleanup --auto-remove` safety params (`--limit`, `--session-id`)
 
 ---
@@ -77,8 +77,10 @@ This file is the authoritative, human+agent-readable test plan for CCSM.
 - [x] debug/{session_id}.txt detected when present
 - [x] telemetry/1p_failed_events.{session_id}.*.json detected when present
 - [x] teams/{session_id}/ detected when present
+- [x] projects/{path_hash}/{session_id}.jsonl transcript detected when present
 - [x] sessions/*.json PID-marker detected when present
 - [x] paste-cache exclusive/shared classification works when cache file exists
+- [x] uniquely referenced global plans (`plans/*.md`, `plans/*.json`) included when applicable
 
 ## 3. delete (session)
 ### 3.1 Dry-run

@@ -78,6 +78,16 @@ class SessionDeleter:
         if teams_dir.exists():
             info.files_to_delete.append(str(teams_dir))
 
+        # Project transcripts - per-project session transcript files
+        projects_dir = self.claude_dir / "projects"
+        if projects_dir.exists():
+            for project_dir in projects_dir.iterdir():
+                if not project_dir.is_dir() or project_dir.name == ".DS_Store":
+                    continue
+                transcript_file = project_dir / f"{session_id}.jsonl"
+                if transcript_file.exists():
+                    info.files_to_delete.append(str(transcript_file))
+
         # Sessions directory - session marker files (by PID)
         sessions_dir = self.claude_dir / "sessions"
         if sessions_dir.exists():
@@ -277,6 +287,7 @@ class SessionDeleter:
                 except Exception as e:
                     result.errors.append(f"Failed to update history.jsonl: {e}")
 
+        self.discovery.invalidate_cache()
         return result
 
     def delete_project(self, project_path: str, include_claude_dir: bool = False, force: bool = False) -> DeleteResult:

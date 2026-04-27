@@ -18,7 +18,7 @@
 |-----------|------|----------|
 | `tasks/{session_id}/` | 工作任務列表 (1.json, 2.json...) | 直接刪除整個目錄 |
 | `todos/*{session_id}*` | 待辦事項 JSON (glob pattern) | 匹配刪除 |
-| `plans/*.md` | 已儲存的 plans（Markdown） | 僅當只有一個 session 引用時刪除 |
+| `plans/*.md`, `plans/*.json` | 已儲存的全域 plans | 僅當只有一個 session 引用時刪除 |
 | `sessions/*.json` | Session marker files（依 JSON 內容中的 sessionId） | 讀取 JSON 內容匹配後刪除 |
 | `teams/{session_id}/` | Team data directory | 直接刪除整個目錄 |
 | `session-env/{session_id}/` | Session 環境變數 | 直接刪除目錄 |
@@ -38,7 +38,7 @@
 
 刪除規則: 當刪除某 session 時，若 paste-cache 檔案僅被該 session 引用，則刪除；若被其他 session 引用，則保留。需掃描 history.jsonl 建立引用計數。
 
-**plans 刪除規則**: plans 為 `~/.claude/plans/*.md`。當刪除某 session 時，若 plan 只被該 session 引用（在 history.jsonl 的 display 欄位中）則刪除；若多 session 共用則保留。
+**plans 刪除規則**: plans 為 `~/.claude/plans/*.md` 與 `~/.claude/plans/*.json`。當刪除某 session 時，若 plan 只被該 session 引用（在 history.jsonl 的 display 欄位中）則刪除；若多 session 共用則保留。
 
 #### 不適合按 session 刪除
 
@@ -87,7 +87,7 @@ Projects: 2 | Sessions: 4
 ~/Documents/Dev/Real-Alpha-Trader (1 session)
  └── 67a0789d-d082-4b67-8c74-22dc52cf696c [2024-03-04]
 
-Orphan sessions (no project):
+Orphan or unmapped sessions:
  • 8007497a-c66c-4ff1-8ca2-e4209bf27e26 [2024-03-03]
 ```
 
@@ -113,13 +113,17 @@ ccsm delete <session_id> [OPTIONS]
 6. `~/.claude/debug/{session_id}.txt` - 調試日誌
 7. `~/.claude/telemetry/1p_failed_events.{session_id}.*.json` - 遙測事件
 8. `~/.claude/teams/{session_id}/` - team data directory
+9. `~/.claude/projects/{path_hash}/{session_id}.jsonl` - transcript 檔案
 
 間接匹配 (需解析內容或追蹤引用):
-9. `~/.claude/paste-cache/{contentHash}.txt` - 需從 history.jsonl 提取 contentHash，並檢查引用計數後才可刪除
-10. `~/.claude/plans/*.md` - 掃描 history.jsonl 的 display 欄位；若 plan 只被該 session 引用則刪除，若共用則保留
+10. `~/.claude/paste-cache/{contentHash}.txt` - 需從 history.jsonl 提取 contentHash，並檢查引用計數後才可刪除
+11. `~/.claude/plans/*.md`, `~/.claude/plans/*.json` - 掃描 history.jsonl 的 display 欄位；若 plan 只被該 session 引用則刪除，若共用則保留
 
 重寫:
-11. `~/.claude/history.jsonl` - 流式處理移除該 session 的紀錄
+12. `~/.claude/history.jsonl` - 流式處理移除該 session 的紀錄
+
+**可見性補充**:
+- 若 transcript 仍存在，但 `history.jsonl` 已缺少對應 project mapping，該 session 會顯示為 orphan/unmapped，而不是消失在列表中。
 
 **選項**:
 - `-n, --dry-run` - 預覽要刪除的檔案，不實際刪除
@@ -283,6 +287,7 @@ def delete_session(session_id):
         "~/.claude/debug/{session_id}.txt",
         "~/.claude/telemetry/1p_failed_events.{session_id}.*.json",
         "~/.claude/teams/{session_id}/",
+        "~/.claude/projects/{path_hash}/{session_id}.jsonl",
     ]
 
     # sessions/*.json: 讀取 JSON 內容檢查 sessionId

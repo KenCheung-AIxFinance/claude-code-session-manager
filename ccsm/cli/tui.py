@@ -262,7 +262,7 @@ class CCSMApp(App):
             self.query_one("#right-hint", Static).update(f"[d] Delete selected session")
         elif self.state.mode == "orphans":
             self._current_sessions = self.orphans
-            self.query_one("#right-title", Label).update(f"Orphan Sessions ({len(self._current_sessions)})")
+            self.query_one("#right-title", Label).update(f"Orphan / Unmapped Sessions ({len(self._current_sessions)})")
             self.query_one("#right-hint", Static).update("[d] Delete selected session")
         else:
             self._current_sessions = []

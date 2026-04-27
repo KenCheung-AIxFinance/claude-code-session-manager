@@ -59,7 +59,7 @@ def format_list_output(
     # Print orphans
     if orphan_sessions:
         console.print()
-        console.print("[bold]Orphan sessions (no project):[/bold]")
+        console.print("[bold]Orphan or unmapped sessions:[/bold]")
         for session in orphan_sessions:
             created = session.created_at.strftime("%Y-%m-%d") if session.created_at else "unknown"
             console.print(f" • {session.id} [{created}]")
