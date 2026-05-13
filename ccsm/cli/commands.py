@@ -153,8 +153,10 @@ def cmd_list(args: argparse.Namespace) -> int:
                 "sessions": [
                     {
                         "id": s.id,
+                        "name": s.name,
                         "status": s.status,
                         "createdAt": s.created_at.isoformat() if s.created_at else None,
+                        "updatedAt": s.updated_at.isoformat() if s.updated_at else None,
                         "taskCount": s.task_count,
                         "todoCount": s.todo_count,
                         "planCount": s.plan_count,
@@ -193,8 +195,10 @@ def cmd_list(args: argparse.Namespace) -> int:
                 "orphanSessions": [
                     {
                         "id": s.id,
+                        "name": s.name,
                         "status": s.status,
                         "createdAt": s.created_at.isoformat() if s.created_at else None,
+                        "updatedAt": s.updated_at.isoformat() if s.updated_at else None,
                     }
                     for s in orphans
                 ],

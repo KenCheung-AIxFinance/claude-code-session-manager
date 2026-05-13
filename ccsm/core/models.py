@@ -13,11 +13,13 @@ class Session:
     id: str
     project_path: Optional[str] = None
     created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
     status: str = "unknown"  # in_progress, completed, unknown
     task_count: int = 0
     todo_count: int = 0
     plan_count: int = 0
     has_transcript: bool = False
+    name: Optional[str] = None  # User-set or auto-generated session title
 
     def __str__(self) -> str:
         return f"Session({self.id[:8]}...)"
