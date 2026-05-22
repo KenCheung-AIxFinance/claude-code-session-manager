@@ -86,7 +86,16 @@ class SessionDeleter:
                     continue
                 transcript_file = project_dir / f"{session_id}.jsonl"
                 if transcript_file.exists():
-                    info.files_to_delete.append(str(transcript_file))
+                    # If this is the only non-agent session in the directory,
+                    # delete the whole directory instead of just the file.
+                    other_sessions = [
+                        f for f in project_dir.glob("*.jsonl")
+                        if f.name != transcript_file.name and not f.stem.startswith("agent-")
+                    ]
+                    if not other_sessions:
+                        info.files_to_delete.append(str(project_dir))
+                    else:
+                        info.files_to_delete.append(str(transcript_file))
 
         # Sessions directory - session marker files (by PID)
         sessions_dir = self.claude_dir / "sessions"
@@ -290,6 +299,28 @@ class SessionDeleter:
         self.discovery.invalidate_cache()
         return result
 
+    def _find_project_transcript_dir(self, sessions: list) -> Optional[Path]:
+        """Find the ~/.claude/projects/{path_hash}/ directory for a set of sessions.
+
+        Args:
+            sessions: List of Session objects belonging to the project.
+
+        Returns:
+            The project transcript directory path, or None if not found.
+        """
+        projects_dir = self.claude_dir / "projects"
+        if not projects_dir.exists() or not sessions:
+            return None
+
+        session_ids = {s.id for s in sessions}
+        for proj_dir in projects_dir.iterdir():
+            if not proj_dir.is_dir() or proj_dir.name == ".DS_Store":
+                continue
+            for session_file in proj_dir.glob("*.jsonl"):
+                if session_file.stem in session_ids:
+                    return proj_dir
+        return None
+
     def delete_project(self, project_path: str, include_claude_dir: bool = False, force: bool = False) -> DeleteResult:
         """Delete a project and all its associated sessions.
 
@@ -310,6 +341,9 @@ class SessionDeleter:
             result.errors.append(f"Project '{project_path}' not found")
             return result
 
+        # Find the project's transcript directory before deleting sessions
+        project_transcript_dir = self._find_project_transcript_dir(project.sessions)
+
         # Delete all sessions in the project
         for session in project.sessions:
             session_result = self.delete_session(session.id, force=force)
@@ -319,6 +353,18 @@ class SessionDeleter:
             result.skipped_files.extend(session_result.skipped_files)
             if not session_result.success:
                 result.success = False
+
+        # Delete the project's transcript directory if it still exists
+        # (may already be gone if the last session deletion removed it)
+        if project_transcript_dir and project_transcript_dir.exists():
+            if self.dry_run:
+                result.deleted_files.append(f"[DRY-RUN] Would delete: {project_transcript_dir}")
+            else:
+                try:
+                    shutil.rmtree(project_transcript_dir)
+                    result.deleted_files.append(str(project_transcript_dir))
+                except Exception as e:
+                    result.errors.append(f"Failed to delete {project_transcript_dir}: {e}")
 
         # Optionally delete the .claude/ directory in the project
         if include_claude_dir:
