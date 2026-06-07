@@ -267,12 +267,16 @@ def cmd_delete_project(args: argparse.Namespace) -> int:
     console.print(f"[bold]Project:[/bold] {project.path}")
     console.print(f"[bold]Sessions to delete:[/bold] {project.session_count}")
 
-    for session in project.sessions:
-        info = deleter.plan_session_deletion(session.id)
-        console.print(f"  - {session.id} ({info.total_files} files)")
+    session_plans, transcript_dir, dot_claude = deleter.plan_project_deletion(
+        normalized_path, include_claude_dir=args.include_claude_dir
+    )
+    for info in session_plans:
+        console.print(f"  - {info.session.id} ({info.total_files} private files)")
 
-    if args.include_claude_dir:
-        console.print(f"  - {normalized_path}/.claude/ (project config)")
+    if transcript_dir:
+        console.print(f"  - {transcript_dir}/ (project transcripts)")
+    if dot_claude:
+        console.print(f"  - {dot_claude}/ (project config)")
 
     if not args.dry_run and not args.force:
         console.print("\n[yellow]This will delete all sessions and optionally the project config.[/yellow]")

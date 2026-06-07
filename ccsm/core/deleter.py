@@ -29,14 +29,19 @@ class SessionDeleter:
         self.dry_run = dry_run
         self.discovery = SessionDiscovery(self.claude_dir)
 
-    def plan_session_deletion(self, session_id: str) -> SessionInfo:
-        """Plan what files would be deleted for a session.
+    def _plan_private_deletion(self, session_id: str) -> SessionInfo:
+        """Plan deletion of a session's private data, excluding transcript files.
+
+        Covers tasks, todos, session-env, file-history, debug, telemetry, teams,
+        sessions PID marker, plans, paste-cache, and history.jsonl modification.
+        Does NOT touch projects/{hash}/ — that is handled by plan_session_deletion
+        (standalone delete) or delete_project (project-wide delete).
 
         Args:
             session_id: The session UUID to plan deletion for.
 
         Returns:
-            SessionInfo with lists of files to delete.
+            SessionInfo with lists of files to delete (no transcript entries).
         """
         session = self.discovery.get_session_by_id(session_id)
         if not session:
@@ -62,14 +67,11 @@ class SessionDeleter:
 
         for pattern_name, pattern_path in direct_patterns:
             if "*" in str(pattern_path):
-                # Glob pattern - use parent directory and glob the filename
                 parent = pattern_path.parent
                 pattern = pattern_path.name
-                matches = list(parent.glob(pattern))
-                for match in matches:
+                for match in parent.glob(pattern):
                     info.files_to_delete.append(str(match))
             else:
-                # Direct path
                 if pattern_path.exists():
                     info.files_to_delete.append(str(pattern_path))
 
@@ -77,25 +79,6 @@ class SessionDeleter:
         teams_dir = self.claude_dir / "teams" / session_id
         if teams_dir.exists():
             info.files_to_delete.append(str(teams_dir))
-
-        # Project transcripts - per-project session transcript files
-        projects_dir = self.claude_dir / "projects"
-        if projects_dir.exists():
-            for project_dir in projects_dir.iterdir():
-                if not project_dir.is_dir() or project_dir.name == ".DS_Store":
-                    continue
-                transcript_file = project_dir / f"{session_id}.jsonl"
-                if transcript_file.exists():
-                    # If this is the only non-agent session in the directory,
-                    # delete the whole directory instead of just the file.
-                    other_sessions = [
-                        f for f in project_dir.glob("*.jsonl")
-                        if f.name != transcript_file.name and not f.stem.startswith("agent-")
-                    ]
-                    if not other_sessions:
-                        info.files_to_delete.append(str(project_dir))
-                    else:
-                        info.files_to_delete.append(str(transcript_file))
 
         # Sessions directory - session marker files (by PID)
         sessions_dir = self.claude_dir / "sessions"
@@ -110,32 +93,22 @@ class SessionDeleter:
                 except (json.JSONDecodeError, IOError):
                     continue
 
-        # Plans - Check if any plan files are associated with this session
-        # First, get all plan references from history
+        # Plans - delete only if uniquely referenced by this session
         plan_refs = self._get_plan_references()
         for plan_path, ref_sessions in plan_refs.items():
             if len(ref_sessions) == 1 and session_id in ref_sessions:
-                # Only this session references it - safe to delete
                 info.files_to_delete.append(plan_path)
-            elif len(ref_sessions) > 1:
-                # Shared with other sessions
-                # We don't add to shared list here (plans are handled differently)
 
-                pass
-
- # Paste-cache - need to check reference count
+        # Paste-cache - need to check reference count
         paste_hashes = self._get_session_paste_hashes(session_id)
         paste_refs = self.discovery.get_paste_hash_references()
-
         for content_hash in paste_hashes:
             refs = paste_refs.get(content_hash, set())
             if len(refs) == 1 and session_id in refs:
-                # Only this session references it - safe to delete
                 cache_file = self.claude_dir / "paste-cache" / f"{content_hash}.txt"
                 if cache_file.exists():
                     info.paste_cache_to_delete.append(str(cache_file))
             elif len(refs) > 1:
-                # Shared with other sessions
                 cache_file = self.claude_dir / "paste-cache" / f"{content_hash}.txt"
                 if cache_file.exists():
                     info.paste_cache_shared.append(str(cache_file))
@@ -144,6 +117,38 @@ class SessionDeleter:
         history_file = self.claude_dir / "history.jsonl"
         if history_file.exists():
             info.files_to_modify.append(str(history_file))
+
+        return info
+
+    def plan_session_deletion(self, session_id: str) -> SessionInfo:
+        """Plan what files would be deleted for a session.
+
+        Args:
+            session_id: The session UUID to plan deletion for.
+
+        Returns:
+            SessionInfo with lists of files to delete.
+        """
+        info = self._plan_private_deletion(session_id)
+
+        # Project transcripts - per-project session transcript files.
+        # If this is the only non-agent session in the project dir, delete the
+        # whole directory; otherwise delete just this session's .jsonl.
+        projects_dir = self.claude_dir / "projects"
+        if projects_dir.exists():
+            for project_dir in projects_dir.iterdir():
+                if not project_dir.is_dir() or project_dir.name == ".DS_Store":
+                    continue
+                transcript_file = project_dir / f"{session_id}.jsonl"
+                if transcript_file.exists():
+                    other_sessions = [
+                        f for f in project_dir.glob("*.jsonl")
+                        if f.name != transcript_file.name and not f.stem.startswith("agent-")
+                    ]
+                    if not other_sessions:
+                        info.files_to_delete.append(str(project_dir))
+                    else:
+                        info.files_to_delete.append(str(transcript_file))
 
         return info
 
@@ -219,38 +224,20 @@ class SessionDeleter:
 
         return dict(plan_refs)
 
-    def delete_session(self, session_id: str, force: bool = False) -> DeleteResult:
-        """Delete a session and all its associated data.
+    def _execute_deletion(self, info: SessionInfo, result: DeleteResult) -> None:
+        """Execute a deletion plan described by a SessionInfo.
+
+        Deletes all files/dirs in info.files_to_delete and info.paste_cache_to_delete,
+        rewrites history.jsonl to remove the session's entries, and records skipped
+        shared paste-cache files.  Respects self.dry_run.
 
         Args:
-            session_id: The session UUID to delete.
-            force: If True, skip confirmation for active sessions.
-
-        Returns:
-            DeleteResult with details of what was deleted.
+            info: The deletion plan (from plan_session_deletion or _plan_private_deletion).
+            result: Accumulator — deleted/modified/error/skipped lists are appended in-place.
         """
-        result = DeleteResult(success=True)
-
-        # Check if session exists
-        session = self.discovery.get_session_by_id(session_id)
-        if not session:
-            result.success = False
-            result.errors.append(f"Session '{session_id}' not found")
-            return result
-
-        # Check if session is active
-        if session.status == "in_progress" and not force:
-            result.errors.append(f"Session '{session_id}' is currently active. Use --force to delete anyway.")
-            result.success = False
-            return result
-
-        # Get plan
-        info = self.plan_session_deletion(session_id)
-
-        # Add paste-cache shared files to files_to_delete (we delete them too after warning)
+        session_id = info.session.id
         all_files_to_delete = info.files_to_delete + info.paste_cache_to_delete
 
-        # Delete files directly
         for file_path in all_files_to_delete:
             if self.dry_run:
                 result.deleted_files.append(f"[DRY-RUN] Would delete: {file_path}")
@@ -265,18 +252,18 @@ class SessionDeleter:
             except Exception as e:
                 result.errors.append(f"Failed to delete {file_path}: {e}")
 
-        # Handle paste-cache shared files
         if info.paste_cache_shared:
             result.skipped_files.extend(info.paste_cache_shared)
 
-        # Handle history.jsonl
+        # Rewrite history.jsonl to remove entries for this session
         history_path = self.claude_dir / "history.jsonl"
+        _dry_run_history_msg = "[DRY-RUN] Would rewrite: history.jsonl"
         if history_path.exists():
             if self.dry_run:
-                result.modified_files.append("[DRY-RUN] Would rewrite: history.jsonl")
+                if _dry_run_history_msg not in result.modified_files:
+                    result.modified_files.append(_dry_run_history_msg)
             else:
                 try:
-                    # Rewrite history.jsonl excluding this session
                     temp_fd, temp_path = tempfile.mkstemp(suffix=".jsonl", dir=self.claude_dir)
                     with os.fdopen(temp_fd, "w", encoding="utf-8") as temp_file:
                         with open(history_path, "r", encoding="utf-8") as orig_file:
@@ -286,15 +273,38 @@ class SessionDeleter:
                                     if entry.get("sessionId") != session_id:
                                         temp_file.write(line)
                                 except json.JSONDecodeError:
-                                    # Preserve invalid/bad JSON lines to avoid data loss.
                                     temp_file.write(line)
-                                    continue
-
-                    # Replace original
                     shutil.move(temp_path, history_path)
-                    result.modified_files.append(str(history_path))
+                    if str(history_path) not in result.modified_files:
+                        result.modified_files.append(str(history_path))
                 except Exception as e:
                     result.errors.append(f"Failed to update history.jsonl: {e}")
+
+    def delete_session(self, session_id: str, force: bool = False) -> DeleteResult:
+        """Delete a session and all its associated data.
+
+        Args:
+            session_id: The session UUID to delete.
+            force: If True, skip confirmation for active sessions.
+
+        Returns:
+            DeleteResult with details of what was deleted.
+        """
+        result = DeleteResult(success=True)
+
+        session = self.discovery.get_session_by_id(session_id)
+        if not session:
+            result.success = False
+            result.errors.append(f"Session '{session_id}' not found")
+            return result
+
+        if session.status == "in_progress" and not force:
+            result.errors.append(f"Session '{session_id}' is currently active. Use --force to delete anyway.")
+            result.success = False
+            return result
+
+        info = self.plan_session_deletion(session_id)
+        self._execute_deletion(info, result)
 
         self.discovery.invalidate_cache()
         return result
@@ -321,8 +331,42 @@ class SessionDeleter:
                     return proj_dir
         return None
 
+    def plan_project_deletion(self, project_path: str, include_claude_dir: bool = False) -> tuple[list[SessionInfo], Optional[Path], Optional[Path]]:
+        """Plan what would be deleted for a project.
+
+        Returns private-data plans for each session (no transcript entries),
+        the project transcript directory, and optionally the .claude/ dir.
+
+        Args:
+            project_path: The project directory path.
+            include_claude_dir: If True, also plan deletion of project's .claude/ dir.
+
+        Returns:
+            Tuple of (list of SessionInfo, transcript_dir or None, claude_dir or None).
+        """
+        project = self.discovery.get_project_by_path(project_path)
+        if not project:
+            return [], None, None
+
+        session_plans = [self._plan_private_deletion(s.id) for s in project.sessions]
+        transcript_dir = self._find_project_transcript_dir(project.sessions)
+
+        dot_claude = None
+        if include_claude_dir:
+            candidate = Path(project_path) / ".claude"
+            if candidate.exists():
+                dot_claude = candidate
+
+        return session_plans, transcript_dir, dot_claude
+
     def delete_project(self, project_path: str, include_claude_dir: bool = False, force: bool = False) -> DeleteResult:
         """Delete a project and all its associated sessions.
+
+        Each session's private data (tasks, todos, history entries, etc.) is
+        deleted individually.  The shared projects/{hash}/ transcript directory
+        is deleted once at the end — this avoids the dry-run/real-delete
+        inconsistency that arose when per-session logic tried to decide whether
+        to delete the dir or just one .jsonl file.
 
         Args:
             project_path: The project directory path.
@@ -334,51 +378,50 @@ class SessionDeleter:
         """
         result = DeleteResult(success=True)
 
-        # Find the project
         project = self.discovery.get_project_by_path(project_path)
         if not project:
             result.success = False
             result.errors.append(f"Project '{project_path}' not found")
             return result
 
-        # Find the project's transcript directory before deleting sessions
+        # Find transcript dir BEFORE any deletions so the path is still locatable.
         project_transcript_dir = self._find_project_transcript_dir(project.sessions)
 
-        # Delete all sessions in the project
+        # Delete private data for each session (no transcript handling here).
         for session in project.sessions:
-            session_result = self.delete_session(session.id, force=force)
-            result.deleted_files.extend(session_result.deleted_files)
-            result.modified_files.extend(session_result.modified_files)
-            result.errors.extend(session_result.errors)
-            result.skipped_files.extend(session_result.skipped_files)
-            if not session_result.success:
+            if session.status == "in_progress" and not force:
+                result.errors.append(
+                    f"Session '{session.id}' is currently active. Use --force to delete anyway."
+                )
                 result.success = False
+                continue
+            info = self._plan_private_deletion(session.id)
+            self._execute_deletion(info, result)
 
-        # Delete the project's transcript directory if it still exists
-        # (may already be gone if the last session deletion removed it)
-        if project_transcript_dir and project_transcript_dir.exists():
+        # Delete the entire transcript directory once.
+        if project_transcript_dir:
             if self.dry_run:
                 result.deleted_files.append(f"[DRY-RUN] Would delete: {project_transcript_dir}")
-            else:
+            elif project_transcript_dir.exists():
                 try:
                     shutil.rmtree(project_transcript_dir)
                     result.deleted_files.append(str(project_transcript_dir))
                 except Exception as e:
                     result.errors.append(f"Failed to delete {project_transcript_dir}: {e}")
 
-        # Optionally delete the .claude/ directory in the project
+        # Optionally delete the .claude/ directory in the project.
         if include_claude_dir:
             claude_dir = Path(project_path) / ".claude"
-            if claude_dir.exists():
-                if self.dry_run:
-                    result.deleted_files.append(f"[DRY-RUN] Would delete: {claude_dir}")
-                else:
-                    try:
-                        shutil.rmtree(claude_dir)
-                        result.deleted_files.append(str(claude_dir))
-                    except Exception as e:
-                        result.errors.append(f"Failed to delete {claude_dir}: {e}")
+            if self.dry_run:
+                result.deleted_files.append(f"[DRY-RUN] Would delete: {claude_dir}")
+            elif claude_dir.exists():
+                try:
+                    shutil.rmtree(claude_dir)
+                    result.deleted_files.append(str(claude_dir))
+                except Exception as e:
+                    result.errors.append(f"Failed to delete {claude_dir}: {e}")
 
+        self.discovery.invalidate_cache()
         return result
 
     def get_stale_history_entries(self) -> list[dict]:
